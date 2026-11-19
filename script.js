@@ -40,6 +40,7 @@
   const directions = {
     front: 0,
     side: 3,
+    "side-left": 3,
     back: 6
   };
 
@@ -108,21 +109,21 @@
     return walkableAreas.some(poly => pointInPolygon(x, y, poly));
   }
 
-  function collidesWithSolid(x, y, currentHeight) {
+  function collidesWithSolid(x, y, currentHeight, jumping = false) {
     if (pointInPolygon(x, y, lake)) return true;
-
     for (const obstacle of obstacles) {
       if (!pointInPolygon(x, y, obstacle.polygon)) continue;
       const platform = obstacle.platform === undefined ? null : platforms[obstacle.platform];
       const standingOnTop = platform && currentHeight >= platform.height - 3 && inEllipse(x, y, platform);
-      if (!standingOnTop) return true;
+      const jumpingOntoPlatform = jumping && platform && inEllipse(x, y, platform);
+      if (!standingOnTop && !jumpingOntoPlatform) return true;
     }
     return false;
   }
 
-  function canStandAt(x, y, height = player.platformHeight) {
+  function canStandAt(x, y, height = player.platformHeight, jumping = false) {
     if (!isWalkable(x, y)) return false;
-    if (collidesWithSolid(x, y, height)) return false;
+    if (collidesWithSolid(x, y, height, jumping)) return false;
     return true;
   }
 
@@ -211,11 +212,11 @@
       // Comprobación por ejes para deslizarse junto a los obstáculos.
       const nextPlatformX = platformAt(nextX, player.y);
       const heightX = nextPlatformX ? nextPlatformX.height : player.platformHeight;
-      if (canStandAt(nextX, player.y, heightX) || player.jumpHeight > 8) player.x = nextX;
+      if (canStandAt(nextX, player.y, heightX, player.jumpHeight > 8)) player.x = nextX;
 
       const nextPlatformY = platformAt(player.x, nextY);
       const heightY = nextPlatformY ? nextPlatformY.height : player.platformHeight;
-      if (canStandAt(player.x, nextY, heightY) || player.jumpHeight > 8) player.y = nextY;
+      if (canStandAt(player.x, nextY, heightY, player.jumpHeight > 8)) player.y = nextY;
     }
 
     // Física vertical: espacio para saltar y gravedad para aterrizar.
