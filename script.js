@@ -1,84 +1,308 @@
+(() => {
+  "use strict";
 
-const player = document.getElementById("player");
-const treasure = document.getElementById("treasure");
-const message = document.getElementById("message");
-const game = document.getElementById("game");
+  // El mapa y los sprites se dibujan en coordenadas originales de 1536 × 1024.
+  const WORLD = { width: 1536, height: 1024 };
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const status = document.getElementById("status");
+  const loading = document.getElementById("loading");
 
-// Posición inicial del personaje
-let playerX = 0;
-let playerY = 0;
+  const map = new Image();
+  map.src = "images/stages/stage%201.png";
 
-// Velocidad de movimiento
-const speed = 10;
+  const spriteSheet = new Image();
+  spriteSheet.src = "images/player/player.png";
 
-// Tamaño del escenario y de los personajes
-const gameWidth = 600;
-const gameHeight = 400;
-const playerSize = 40;
+  // La hoja del protagonista está organizada en 9 columnas y 5 filas:
+  // fila 0 = inactivo, fila 1 = correr, fila 2 = saltar.
+  // En cada fila: 3 frames de frente, 3 de perfil y 3 de espaldas.
+  const SHEET = { columns: 9, rows: 5, idleRow: 0, runRow: 1, jumpRow: 2 };
 
-// Posición aleatoria del tesoro
-let treasureX = Math.floor(
-    Math.random() * (gameWidth - playerSize)
-);
+  const player = {
+    x: 330,
+    y: 690,
+    width: 86,
+    height: 112,
+    radius: 17,
+    direction: "front",
+    moving: false,
+    frame: 0,
+    frameTimer: 0,
+    jumpHeight: 0,
+    verticalSpeed: 0,
+    grounded: true,
+    platformHeight: 0,
+    speed: 245
+  };
 
-let treasureY = Math.floor(
-    Math.random() * (gameHeight - playerSize)
-);
+  const keys = new Set();
+  const directions = {
+    front: 0,
+    side: 3,
+    back: 6
+  };
 
-// Colocar el tesoro
-treasure.style.left = treasureX + "px";
-treasure.style.top = treasureY + "px";
+  // Superficies transitables: las dos islas y el puente.
+  const walkableAreas = [
+    [[91,150],[185,137],[472,143],[515,181],[644,190],[681,246],[681,729],[650,795],[594,824],[153,818],[94,775],[78,690],[78,250]],
+    [[883,202],[923,166],[1110,137],[1378,151],[1448,205],[1462,715],[1430,775],[1376,817],[946,815],[891,773],[872,700]],
+    [[665,421],[887,421],[891,539],[665,539]]
+  ];
 
-// Detectar las teclas pulsadas
-document.addEventListener("keydown", function(event) {
+  // Agua de la laguna: no se puede caminar ni saltar por encima.
+  const lake = [[1071,419],[1111,410],[1145,419],[1171,405],[1216,411],[1240,425],[1280,423],[1310,446],[1332,481],[1356,493],[1364,541],[1347,566],[1321,578],[1317,626],[1285,654],[1245,668],[1194,682],[1140,671],[1102,681],[1072,661],[1041,641],[1016,616],[984,606],[967,577],[973,532],[988,501],[1026,481],[1054,455]];
 
-    // Evitar el desplazamiento de la página
-    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
-        event.preventDefault();
+  // Zonas elevadas. La altura es visual y permite caminar sobre la superficie
+  // de los tocones después de saltar hasta ellos.
+  const platforms = [
+    { x: 365, y: 231, rx: 105, ry: 49, height: 66 },
+    { x: 260, y: 378, rx: 82, ry: 39, height: 54 },
+    { x: 455, y: 478, rx: 78, ry: 35, height: 46 },
+    { x: 258, y: 570, rx: 82, ry: 38, height: 48 }
+  ];
+
+  // Volúmenes sólidos de las piedras y de la cueva.
+  const obstacles = [
+    { polygon: [[237,244],[482,244],[507,292],[481,367],[444,386],[267,380],[226,340]], platform: 0, depth: 382 },
+    { polygon: [[171,396],[348,396],[365,451],[347,486],[199,492],[164,459]], platform: 1, depth: 493 },
+    { polygon: [[365,473],[548,473],[553,523],[525,565],[388,565],[360,530]], platform: 2, depth: 568 },
+    { polygon: [[169,573],[350,573],[359,619],[336,652],[197,652],[166,621]], platform: 3, depth: 654 },
+    { polygon: [[1095,184],[1328,184],[1348,247],[1328,343],[1289,365],[1135,365],[1093,328],[1084,249]], depth: 366 }
+  ];
+
+  // Máscaras de las caras delanteras. Se vuelven a dibujar por encima del
+  // jugador cuando este se encuentra detrás del objeto, creando profundidad.
+  const foregroundMasks = [
+    { depth: 382, polygon: [[238,258],[482,258],[481,367],[444,386],[267,380],[226,340]] },
+    { depth: 493, polygon: [[171,398],[348,398],[365,451],[347,486],[199,492],[164,459]] },
+    { depth: 568, polygon: [[365,474],[548,474],[553,523],[525,565],[388,565],[360,530]] },
+    { depth: 654, polygon: [[169,574],[350,574],[359,619],[336,652],[197,652],[166,621]] },
+    { depth: 366, polygon: [[1095,244],[1328,244],[1348,328],[1328,355],[1289,365],[1135,365],[1093,328]] }
+  ];
+
+  let lastTime = 0;
+  let mapReady = false;
+  let spriteReady = false;
+
+  function pointInPolygon(x, y, polygon) {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const a = polygon[i], b = polygon[j];
+      const crosses = ((a[1] > y) !== (b[1] > y)) &&
+        (x < (b[0] - a[0]) * (y - a[1]) / ((b[1] - a[1]) || 0.00001) + a[0]);
+      if (crosses) inside = !inside;
+    }
+    return inside;
+  }
+
+  function inEllipse(x, y, p) {
+    return ((x - p.x) ** 2) / (p.rx ** 2) + ((y - p.y) ** 2) / (p.ry ** 2) <= 1;
+  }
+
+  function platformAt(x, y) {
+    return platforms.find(p => inEllipse(x, y, p)) || null;
+  }
+
+  function isWalkable(x, y) {
+    return walkableAreas.some(poly => pointInPolygon(x, y, poly));
+  }
+
+  function collidesWithSolid(x, y, currentHeight) {
+    if (pointInPolygon(x, y, lake)) return true;
+
+    for (const obstacle of obstacles) {
+      if (!pointInPolygon(x, y, obstacle.polygon)) continue;
+      const platform = obstacle.platform === undefined ? null : platforms[obstacle.platform];
+      const standingOnTop = platform && currentHeight >= platform.height - 3 && inEllipse(x, y, platform);
+      if (!standingOnTop) return true;
+    }
+    return false;
+  }
+
+  function canStandAt(x, y, height = player.platformHeight) {
+    if (!isWalkable(x, y)) return false;
+    if (collidesWithSolid(x, y, height)) return false;
+    return true;
+  }
+
+  function getFrameColumn() {
+    const base = directions[player.direction];
+    return base + (player.frame % 3);
+  }
+
+  function drawPlayer() {
+    const groundY = player.y;
+    const renderY = groundY - player.jumpHeight - player.platformHeight;
+    const drawX = player.x - player.width / 2;
+    const drawY = renderY - player.height;
+
+    // Sombra: permanece pegada al suelo incluso durante el salto.
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.12, 0.30 - player.jumpHeight / 500);
+    ctx.fillStyle = "#123c55";
+    ctx.beginPath();
+    ctx.ellipse(player.x, groundY - player.platformHeight * 0.12, 22, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    if (spriteReady) {
+      const cellW = spriteSheet.naturalWidth / SHEET.columns;
+      const cellH = spriteSheet.naturalHeight / SHEET.rows;
+      const row = player.jumpHeight > 4 ? SHEET.jumpRow : (player.moving ? SHEET.runRow : SHEET.idleRow);
+      const sx = getFrameColumn() * cellW;
+      const sy = row * cellH;
+
+      ctx.save();
+      if (player.direction === "side-left") {
+        ctx.translate(player.x * 2, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(spriteSheet, sx, sy, cellW, cellH, drawX, drawY, player.width, player.height);
+      ctx.restore();
+    } else {
+      // Sustituto provisional mientras termina de cargar el spritesheet.
+      ctx.fillStyle = "#e52e35";
+      ctx.fillRect(player.x - 19, renderY - 76, 38, 42);
+      ctx.fillStyle = "#f3c59b";
+      ctx.fillRect(player.x - 22, renderY - 105, 44, 35);
+      ctx.fillStyle = "#a51d28";
+      ctx.fillRect(player.x - 24, renderY - 111, 48, 15);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(player.x - 14, renderY - 91, 7, 9);
+      ctx.fillRect(player.x + 7, renderY - 91, 7, 9);
+      ctx.fillStyle = "#6b432d";
+      ctx.fillRect(player.x - 19, renderY - 35, 16, 27);
+      ctx.fillRect(player.x + 3, renderY - 35, 16, 27);
+    }
+  }
+
+  function drawForegroundMask(mask) {
+    ctx.save();
+    ctx.beginPath();
+    mask.polygon.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(map, 0, 0, WORLD.width, WORLD.height);
+    ctx.restore();
+  }
+
+  function update(dt) {
+    let dx = 0, dy = 0;
+    if (keys.has("ArrowLeft") || keys.has("KeyA")) dx -= 1;
+    if (keys.has("ArrowRight") || keys.has("KeyD")) dx += 1;
+    if (keys.has("ArrowUp") || keys.has("KeyW")) dy -= 1;
+    if (keys.has("ArrowDown") || keys.has("KeyS")) dy += 1;
+
+    const length = Math.hypot(dx, dy);
+    player.moving = length > 0;
+
+    if (length) {
+      dx /= length; dy /= length;
+      if (Math.abs(dx) > Math.abs(dy)) player.direction = dx < 0 ? "side-left" : "side";
+      else player.direction = dy < 0 ? "back" : "front";
+
+      const stepX = dx * player.speed * dt;
+      const stepY = dy * player.speed * dt;
+      const nextX = player.x + stepX;
+      const nextY = player.y + stepY;
+
+      // Comprobación por ejes para deslizarse junto a los obstáculos.
+      const nextPlatformX = platformAt(nextX, player.y);
+      const heightX = nextPlatformX ? nextPlatformX.height : player.platformHeight;
+      if (canStandAt(nextX, player.y, heightX) || player.jumpHeight > 8) player.x = nextX;
+
+      const nextPlatformY = platformAt(player.x, nextY);
+      const heightY = nextPlatformY ? nextPlatformY.height : player.platformHeight;
+      if (canStandAt(player.x, nextY, heightY) || player.jumpHeight > 8) player.y = nextY;
     }
 
-    // Movimiento del personaje
-    if (event.key === "ArrowUp") {
-        playerY -= speed;
+    // Física vertical: espacio para saltar y gravedad para aterrizar.
+    const currentPlatform = platformAt(player.x, player.y);
+    const targetHeight = currentPlatform ? currentPlatform.height : 0;
+
+    if (player.jumpHeight > 0 || player.verticalSpeed > 0) {
+      player.jumpHeight += player.verticalSpeed * dt;
+      player.verticalSpeed -= 1050 * dt;
+
+      if (player.jumpHeight <= 0) {
+        player.jumpHeight = 0;
+        player.verticalSpeed = 0;
+        player.grounded = true;
+      }
     }
 
-    if (event.key === "ArrowDown") {
-        playerY += speed;
+    if (player.jumpHeight === 0) {
+      if (targetHeight > player.platformHeight) {
+        // Solo se sube a una plataforma saltando: no se trepa por sus paredes.
+        player.platformHeight = targetHeight;
+      } else if (!currentPlatform) {
+        player.platformHeight = Math.max(0, player.platformHeight - 220 * dt);
+      }
     }
 
-    if (event.key === "ArrowLeft") {
-        playerX -= speed;
+    if (player.moving) {
+      player.frameTimer += dt;
+      if (player.frameTimer >= 0.13) {
+        player.frame = (player.frame + 1) % 3;
+        player.frameTimer = 0;
+      }
+    } else {
+      player.frame = 0;
+      player.frameTimer = 0;
     }
+  }
 
-    if (event.key === "ArrowRight") {
-        playerX += speed;
+  function render() {
+    if (!mapReady) return;
+    ctx.clearRect(0, 0, WORLD.width, WORLD.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(map, 0, 0, WORLD.width, WORLD.height);
+
+    // Máscaras de objetos que quedan por delante del personaje según su
+    // profundidad. Si el jugador está delante, se dibujan antes que él.
+    const behind = foregroundMasks.filter(mask => player.y < mask.depth);
+    const inFront = foregroundMasks.filter(mask => player.y >= mask.depth);
+
+    behind.forEach(drawForegroundMask);
+    drawPlayer();
+    inFront.forEach(drawForegroundMask);
+  }
+
+  function loop(timestamp) {
+    const dt = Math.min((timestamp - lastTime) / 1000 || 0, 0.033);
+    lastTime = timestamp;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  document.addEventListener("keydown", event => {
+    const key = event.code;
+    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(key)) event.preventDefault();
+    keys.add(key);
+
+    if (key === "Space" && player.jumpHeight === 0 && player.verticalSpeed === 0) {
+      player.verticalSpeed = 455;
+      player.grounded = false;
+      status.textContent = "¡Salto!";
     }
+  });
 
-    // Limitar el movimiento dentro del escenario
-    playerX = Math.max(0, Math.min(playerX, gameWidth - playerSize));
-    playerY = Math.max(0, Math.min(playerY, gameHeight - playerSize));
+  document.addEventListener("keyup", event => keys.delete(event.code));
+  window.addEventListener("blur", () => keys.clear());
 
-    // Actualizar posición del personaje
-    player.style.left = playerX + "px";
-    player.style.top = playerY + "px";
-
-    // Comprobar si ha encontrado el tesoro
-    checkCollision();
-});
-
-// Comprobar colisión entre personaje y tesoro
-function checkCollision() {
-
-    const distanceX = Math.abs(playerX - treasureX);
-    const distanceY = Math.abs(playerY - treasureY);
-
-    if (distanceX < playerSize && distanceY < playerSize) {
-
-        message.textContent = "🎉 ¡Felicidades! ¡Has encontrado el tesoro!";
-
-        treasure.style.display = "none";
-
-        // Finalizar el movimiento
-        document.removeEventListener("keydown", arguments.callee);
-    }
-}
+  map.onload = () => {
+    mapReady = true;
+    loading.classList.add("hidden");
+    requestAnimationFrame(loop);
+  };
+  map.onerror = () => {
+    loading.textContent = "No se pudo cargar images/stages/stage 1.png";
+  };
+  spriteSheet.onload = () => { spriteReady = true; };
+  spriteSheet.onerror = () => {
+    status.textContent = "No se pudo cargar el sprite del jugador; se muestra un personaje provisional.";
+  };
+})();
