@@ -109,22 +109,42 @@
     return walkableAreas.some(poly => pointInPolygon(x, y, poly));
   }
 
-  function collidesWithSolid(x, y, currentHeight, jumping = false) {
-    if (pointInPolygon(x, y, lake)) return true;
+  // La sombra representa la huella del jugador en el suelo. Todas las
+  // colisiones se calculan desde este punto, nunca desde el sprite dibujado.
+  const FOOTPRINT_RADIUS = 12;
+  const FOOTPRINT_SAMPLES = [
+    [0, 0], [FOOTPRINT_RADIUS, 0], [-FOOTPRINT_RADIUS, 0],
+    [0, FOOTPRINT_RADIUS], [0, -FOOTPRINT_RADIUS],
+    [8, 8], [-8, 8], [8, -8], [-8, -8]
+  ];
+
+  function footprintTouchesPolygon(x, y, polygon) {
+    return FOOTPRINT_SAMPLES.some(([ox, oy]) => pointInPolygon(x + ox, y + oy, polygon));
+  }
+
+  function collidesWithSolid(x, y, jumpHeight = player.jumpHeight, platformHeight = player.platformHeight) {
+    // El lago siempre es infranqueable: el salto no permite cruzarlo.
+    if (footprintTouchesPolygon(x, y, lake)) return true;
+
     for (const obstacle of obstacles) {
-      if (!pointInPolygon(x, y, obstacle.polygon)) continue;
+      if (!footprintTouchesPolygon(x, y, obstacle.polygon)) continue;
+
       const platform = obstacle.platform === undefined ? null : platforms[obstacle.platform];
-      const standingOnTop = platform && currentHeight >= platform.height - 3 && inEllipse(x, y, platform);
-      const jumpingOntoPlatform = jumping && platform && inEllipse(x, y, platform);
-      if (!standingOnTop && !jumpingOntoPlatform) return true;
+      if (!platform) return true;
+
+      const shadowOnTop = inEllipse(x, y, platform);
+      const alreadyOnTop = platformHeight >= platform.height - 3 && shadowOnTop;
+      // Para subir, la sombra debe estar dentro de la superficie y el
+      // personaje debe haber alcanzado físicamente la altura de esa piedra.
+      const jumpingHighEnough = jumpHeight >= platform.height && shadowOnTop;
+      if (!alreadyOnTop && !jumpingHighEnough) return true;
     }
     return false;
   }
 
-  function canStandAt(x, y, height = player.platformHeight, jumping = false) {
+  function canStandAt(x, y) {
     if (!isWalkable(x, y)) return false;
-    if (collidesWithSolid(x, y, height, jumping)) return false;
-    return true;
+    return !collidesWithSolid(x, y);
   }
 
   function getFrameColumn() {
@@ -140,11 +160,16 @@
 
     // Sombra: permanece pegada al suelo incluso durante el salto.
     ctx.save();
-    ctx.globalAlpha = Math.max(0.12, 0.30 - player.jumpHeight / 500);
-    ctx.fillStyle = "#123c55";
+    ctx.globalAlpha = Math.max(0.18, 0.42 - player.jumpHeight / 330);
+    ctx.fillStyle = "#102d42";
     ctx.beginPath();
-    ctx.ellipse(player.x, groundY - player.platformHeight * 0.12, 22, 8, 0, 0, Math.PI * 2);
+    // Esta elipse es el punto de apoyo real del personaje en el mapa.
+    ctx.ellipse(player.x, groundY, 23, 10, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.globalAlpha = Math.max(0.22, 0.55 - player.jumpHeight / 300);
+    ctx.strokeStyle = "#d7f4ff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
     ctx.restore();
 
     if (spriteReady) {
@@ -210,13 +235,11 @@
       const nextY = player.y + stepY;
 
       // Comprobación por ejes para deslizarse junto a los obstáculos.
-      const nextPlatformX = platformAt(nextX, player.y);
-      const heightX = nextPlatformX ? nextPlatformX.height : player.platformHeight;
-      if (canStandAt(nextX, player.y, heightX, player.jumpHeight > 8)) player.x = nextX;
-
-      const nextPlatformY = platformAt(player.x, nextY);
-      const heightY = nextPlatformY ? nextPlatformY.height : player.platformHeight;
-      if (canStandAt(player.x, nextY, heightY, player.jumpHeight > 8)) player.y = nextY;
+      // La sombra se desplaza primero en X y después en Y. Así se puede
+      // rozar una pared y deslizarse por ella sin que el cuerpo del sprite
+      // provoque colisiones falsas.
+      if (canStandAt(nextX, player.y)) player.x = nextX;
+      if (canStandAt(player.x, nextY)) player.y = nextY;
     }
 
     // Física vertical: espacio para saltar y gravedad para aterrizar.
@@ -235,9 +258,10 @@
     }
 
     if (player.jumpHeight === 0) {
-      if (targetHeight > player.platformHeight) {
-        // Solo se sube a una plataforma saltando: no se trepa por sus paredes.
-        player.platformHeight = targetHeight;
+      if (currentPlatform && player.platformHeight < currentPlatform.height) {
+        // Solo aterriza arriba si la trayectoria alcanzó la altura de la piedra.
+        // La validación de altura ocurre durante el salto, usando la sombra.
+        player.platformHeight = currentPlatform.height;
       } else if (!currentPlatform) {
         player.platformHeight = Math.max(0, player.platformHeight - 220 * dt);
       }
