@@ -59,7 +59,7 @@
       [126, 665], [78, 599], [43, 505]
     ],
     [
-      [978, 354], [1008, 275], [1056, 213], [1125, 185], [1205, 178],
+      [978, 330], [1008, 275], [1056, 213], [1125, 185], [1205, 178],
       [1291, 137], [1368, 65], [1457, 52], [1528, 83], [1595, 139],
       [1668, 194], [1708, 267], [1725, 365], [1705, 464], [1677, 570],
       [1701, 654], [1652, 704], [1578, 739], [1491, 747], [1405, 728],
@@ -67,15 +67,58 @@
       [1017, 667], [1035, 603], [984, 526], [970, 438]
     ],
     // Superficie transitable del puente.
-    [[790, 348], [979, 348], [979, 408], [790, 408]]
+    [[770, 330], [1000, 330], [1000, 424], [770, 424]]
   ];
 
-  const FOOTPRINT_RADIUS = 13;
+  const FOOTPRINT_RADIUS = 10;
   const FOOTPRINT_SAMPLES = [
     [0, 0], [FOOTPRINT_RADIUS, 0], [-FOOTPRINT_RADIUS, 0],
     [0, FOOTPRINT_RADIUS], [0, -FOOTPRINT_RADIUS],
-    [9, 9], [-9, 9], [9, -9], [-9, -9]
+    [7, 7], [-7, 7], [7, -7], [-7, -7]
   ];
+
+  // Las celdas del spritesheet tienen márgenes transparentes irregulares.
+  // Se recorta el contenido visible de cada fotograma para que todos queden
+  // centrados por los pies y nunca aparezcan píxeles del fotograma vecino.
+  let spriteFrames = [];
+
+  function prepareSpriteFrames() {
+    const frameCanvas = document.createElement("canvas");
+    frameCanvas.width = spriteSheet.naturalWidth;
+    frameCanvas.height = spriteSheet.naturalHeight;
+    const frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
+    frameCtx.drawImage(spriteSheet, 0, 0);
+
+    const cellW = spriteSheet.naturalWidth / SHEET.columns;
+    const cellH = spriteSheet.naturalHeight / SHEET.rows;
+    const pixels = frameCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height).data;
+
+    spriteFrames = [];
+    for (let row = 0; row < SHEET.rows; row++) {
+      for (let col = 0; col < SHEET.columns; col++) {
+        const left = Math.floor(col * cellW);
+        const right = Math.floor((col + 1) * cellW);
+        const top = Math.floor(row * cellH);
+        const bottom = Math.floor((row + 1) * cellH);
+        let minX = right, minY = bottom, maxX = left - 1, maxY = top - 1;
+
+        for (let y = top; y < bottom; y++) {
+          for (let x = left; x < right; x++) {
+            if (pixels[(y * frameCanvas.width + x) * 4 + 3] > 8) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+
+        spriteFrames.push(maxX >= minX ? {
+          x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1
+        } : null);
+      }
+    }
+  }
 
   let lastTime = 0;
   let mapReady = false;
@@ -108,17 +151,20 @@
   function drawPlayer() {
     if (!spriteReady) return;
 
-    const cellW = spriteSheet.naturalWidth / SHEET.columns;
-    const cellH = spriteSheet.naturalHeight / SHEET.rows;
     const row = player.attacking ? SHEET.attackRow :
       (player.moving ? SHEET.runRow : SHEET.idleRow);
-    const sx = getFrameColumn() * cellW;
-    const sy = row * cellH;
-    const drawX = player.x - player.width / 2;
-    const drawY = player.y - player.height + 12;
+    const column = getFrameColumn();
+    const frame = spriteFrames[row * SHEET.columns + column];
+    if (!frame) return;
 
-    // La sombra permanece siempre en el suelo: el personaje ya no tiene
-    // ningún desplazamiento vertical independiente.
+    // La escala se calcula sobre los píxeles visibles, no sobre la celda
+    // completa. Así el tamaño y el punto de apoyo no "bailan" entre frames.
+    const scale = Math.min(player.width / frame.width, player.height / frame.height);
+    const drawWidth = frame.width * scale;
+    const drawHeight = frame.height * scale;
+    const drawX = player.x - drawWidth / 2;
+    const drawY = player.y - drawHeight;
+
     ctx.save();
     ctx.fillStyle = "rgba(12, 39, 54, 0.32)";
     ctx.beginPath();
@@ -134,8 +180,8 @@
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(
       spriteSheet,
-      sx, sy, cellW, cellH,
-      drawX, drawY, player.width, player.height
+      frame.x, frame.y, frame.width, frame.height,
+      drawX, drawY, drawWidth, drawHeight
     );
     ctx.restore();
   }
@@ -253,7 +299,7 @@
     loading.textContent = "No se pudo cargar images/stages/stage 1.png";
   };
 
-  spriteSheet.onload = () => { spriteReady = true; };
+  spriteSheet.onload = () => { prepareSpriteFrames(); spriteReady = true; };
   spriteSheet.onerror = () => {
     status.textContent = "No se pudo cargar el sprite del jugador.";
   };
