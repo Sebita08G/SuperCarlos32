@@ -77,58 +77,48 @@
     [7, 7], [-7, 7], [7, -7], [-7, -7]
   ];
 
-  // Cada fotograma se recorta por su transparencia, pero además se analiza
-  // su zona inferior para encontrar el punto real de apoyo de los pies.
+  // La nueva hoja está organizada en celdas fijas de 170 × 205 px.
+  // Nunca recortamos el dibujo: cada frame usa su celda completa.
   let spriteFrames = [];
   let spriteScale = 1;
+  let cellWidth = 0;
+  let cellHeight = 0;
 
-  function findFootAnchor(pixels, canvasWidth, left, top, minX, minY, maxX, maxY) {
-    // Se busca desde el píxel más bajo hacia arriba. Se ignoran píxeles
-    // semitransparentes del antialiasing y se exige una pequeña línea sólida.
-    const searchTop = Math.max(minY, maxY - 12);
+  function findCellFootAnchor(imageData, imageWidth, left, top, width, height) {
+    let lowestY = -1;
 
-    for (let y = maxY; y >= searchTop; y--) {
-      const runs = [];
-      let runStart = -1;
-
-      for (let x = minX; x <= maxX + 1; x++) {
-        const alpha = x <= maxX
-          ? pixels[(y * canvasWidth + x) * 4 + 3]
-          : 0;
-
-        if (alpha >= 80) {
-          if (runStart === -1) runStart = x;
-        } else if (runStart !== -1) {
-          if (x - runStart >= 3) runs.push([runStart, x - 1]);
-          runStart = -1;
+    // Localiza la fila más baja que contiene píxeles visibles dentro de la celda.
+    for (let y = height - 1; y >= 0 && lowestY === -1; y--) {
+      for (let x = 0; x < width; x++) {
+        const alpha = imageData[((top + y) * imageWidth + left + x) * 4 + 3];
+        if (alpha > 8) {
+          lowestY = y;
+          break;
         }
-      }
-
-      if (runs.length) {
-        const footLeft = Math.min(...runs.map(run => run[0]));
-        const footRight = Math.max(...runs.map(run => run[1]));
-        return {
-          x: (footLeft + footRight) / 2 - minX,
-          y: y - minY
-        };
       }
     }
 
-    // Respaldo para dibujos cuyo pie no forme una línea de 3 píxeles.
-    let lowestLeft = maxX;
-    let lowestRight = minX;
-    for (let y = Math.max(minY, maxY - 8); y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        if (pixels[(y * canvasWidth + x) * 4 + 3] >= 80) {
-          lowestLeft = Math.min(lowestLeft, x);
-          lowestRight = Math.max(lowestRight, x);
+    if (lowestY < 0) return { x: width / 2, y: height - 1 };
+
+    // Usa una franja de tres píxeles en la base para centrar el apoyo
+    // incluso cuando un pie queda uno o dos píxeles más bajo que el otro.
+    let minX = width;
+    let maxX = -1;
+    const firstY = Math.max(0, lowestY - 2);
+
+    for (let y = firstY; y <= lowestY; y++) {
+      for (let x = 0; x < width; x++) {
+        const alpha = imageData[((top + y) * imageWidth + left + x) * 4 + 3];
+        if (alpha > 8) {
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
         }
       }
     }
 
     return {
-      x: (lowestLeft + lowestRight) / 2 - minX,
-      y: maxY - minY
+      x: maxX >= minX ? (minX + maxX) / 2 : width / 2,
+      y: lowestY
     };
   }
 
@@ -139,60 +129,42 @@
     const frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
     frameCtx.drawImage(spriteSheet, 0, 0);
 
-    const cellW = spriteSheet.naturalWidth / SHEET.columns;
-    const cellH = spriteSheet.naturalHeight / SHEET.rows;
-    const pixels = frameCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height).data;
+    cellWidth = spriteSheet.naturalWidth / SHEET.columns;
+    cellHeight = spriteSheet.naturalHeight / SHEET.rows;
+
+    if (!Number.isInteger(cellWidth) || !Number.isInteger(cellHeight)) {
+      throw new Error("El spritesheet debe dividirse exactamente en 9 columnas y 5 filas.");
+    }
+
+    const pixels = frameCtx.getImageData(
+      0, 0, frameCanvas.width, frameCanvas.height
+    ).data;
 
     spriteFrames = [];
-    let widestFrame = 0;
-    let tallestFrame = 0;
 
     for (let row = 0; row < SHEET.rows; row++) {
       for (let col = 0; col < SHEET.columns; col++) {
-        const left = Math.floor(col * cellW);
-        const right = Math.floor((col + 1) * cellW);
-        const top = Math.floor(row * cellH);
-        const bottom = Math.floor((row + 1) * cellH);
-        let minX = right, minY = bottom, maxX = left - 1, maxY = top - 1;
+        const left = col * cellWidth;
+        const top = row * cellHeight;
+        const anchor = findCellFootAnchor(
+          pixels, frameCanvas.width, left, top, cellWidth, cellHeight
+        );
 
-        for (let y = top; y < bottom; y++) {
-          for (let x = left; x < right; x++) {
-            if (pixels[(y * frameCanvas.width + x) * 4 + 3] > 8) {
-              minX = Math.min(minX, x);
-              minY = Math.min(minY, y);
-              maxX = Math.max(maxX, x);
-              maxY = Math.max(maxY, y);
-            }
-          }
-        }
-
-        let frame = null;
-        if (maxX >= minX) {
-          const footAnchor = findFootAnchor(
-            pixels, frameCanvas.width, left, top, minX, minY, maxX, maxY
-          );
-
-          frame = {
-            x: minX,
-            y: minY,
-            width: maxX - minX + 1,
-            height: maxY - minY + 1,
-            anchorX: footAnchor.x,
-            anchorY: footAnchor.y
-          };
-
-          widestFrame = Math.max(widestFrame, frame.width);
-          tallestFrame = Math.max(tallestFrame, frame.height);
-        }
-
-        spriteFrames.push(frame);
+        spriteFrames.push({
+          x: left,
+          y: top,
+          width: cellWidth,
+          height: cellHeight,
+          anchorX: anchor.x,
+          anchorY: anchor.y
+        });
       }
     }
 
-    // Una sola escala para mantener el tamaño del personaje entre fotogramas.
+    // Una escala única para todas las celdas, sin ajustes por fotograma.
     spriteScale = Math.min(
-      player.width / widestFrame,
-      player.height / tallestFrame
+      player.width / cellWidth,
+      player.height / cellHeight
     );
   }
 
@@ -233,10 +205,10 @@
     const frame = spriteFrames[row * SHEET.columns + column];
     if (!frame) return;
 
-    // El punto inferior de los pies de ESTE fotograma se coloca exactamente
-    // en player.x/player.y. Así el cuerpo puede variar de pose sin temblar.
-    const drawWidth = frame.width * spriteScale;
-    const drawHeight = frame.height * spriteScale;
+    // Se dibuja la celda COMPLETA (170 × 205), nunca un recorte variable.
+    // El apoyo inferior detectado dentro de la celda se alinea con player.x/y.
+    const drawWidth = cellWidth * spriteScale;
+    const drawHeight = cellHeight * spriteScale;
     const drawX = player.x - frame.anchorX * spriteScale;
     const drawY = player.y - frame.anchorY * spriteScale;
 
