@@ -220,6 +220,15 @@
       walkFrames.forEach(frame => {
         frame.anchorY = sharedGroundY;
       });
+
+      // Los sprites laterales ya están centrados visualmente dentro de
+      // sus celdas. No debemos recalcular X desde la anchura de los pies:
+      // su separación cambia entre poses y provoca un salto lateral aparente.
+      if (firstColumn === 3) {
+        walkFrames.forEach(frame => {
+          frame.anchorX = cellWidth / 2;
+        });
+      }
     }
 
     // Una escala única para todas las celdas, sin ajustes por fotograma.
