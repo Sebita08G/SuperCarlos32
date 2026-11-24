@@ -207,6 +207,21 @@
       }
     }
 
+    // En la animación de caminar, algunas poses levantan un pie y la
+    // caja del personaje queda más alta dentro de su celda. Alineamos los
+    // tres fotogramas de cada orientación con la misma línea de suelo.
+    // Esto evita que el sprite suba y baje al avanzar la animación.
+    const walkRowStart = SHEET.runRow * SHEET.columns;
+    for (const firstColumn of [0, 3]) {
+      const walkFrames = [0, 1, 2].map(offset =>
+        spriteFrames[walkRowStart + firstColumn + offset]
+      );
+      const sharedGroundY = Math.max(...walkFrames.map(frame => frame.anchorY));
+      walkFrames.forEach(frame => {
+        frame.anchorY = sharedGroundY;
+      });
+    }
+
     // Una escala única para todas las celdas, sin ajustes por fotograma.
     spriteScale = Math.min(
       player.width / cellWidth,
