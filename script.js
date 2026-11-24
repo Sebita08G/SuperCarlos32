@@ -85,43 +85,89 @@
   let cellHeight = 0;
 
   function findCellFootAnchor(imageData, imageWidth, left, top, width, height) {
-    let lowestY = -1;
+    // Algunos frames contienen píxeles sueltos debajo de los zapatos.
+    // Buscamos el componente conectado más grande para identificar el cuerpo
+    // del personaje e ignorar esos restos y efectos aislados.
+    const visited = new Uint8Array(width * height);
+    const queue = new Int32Array(width * height);
+    let bestArea = 0;
+    let bestBottom = -1;
+    let bestFootLeft = width;
+    let bestFootRight = -1;
 
-    // Localiza la fila más baja que contiene píxeles visibles dentro de la celda.
-    for (let y = height - 1; y >= 0 && lowestY === -1; y--) {
-      for (let x = 0; x < width; x++) {
-        const alpha = imageData[((top + y) * imageWidth + left + x) * 4 + 3];
-        if (alpha > 8) {
-          lowestY = y;
-          break;
+    for (let startY = 0; startY < height; startY++) {
+      for (let startX = 0; startX < width; startX++) {
+        const startIndex = startY * width + startX;
+        if (visited[startIndex]) continue;
+
+        const alpha = imageData[
+          ((top + startY) * imageWidth + left + startX) * 4 + 3
+        ];
+        if (alpha <= 8) {
+          visited[startIndex] = 1;
+          continue;
+        }
+
+        let head = 0;
+        let tail = 0;
+        let area = 0;
+        let componentBottom = -1;
+        let footLeft = width;
+        let footRight = -1;
+
+        queue[tail++] = startIndex;
+        visited[startIndex] = 1;
+
+        while (head < tail) {
+          const index = queue[head++];
+          const x = index % width;
+          const y = Math.floor(index / width);
+          area++;
+
+          if (y > componentBottom) {
+            componentBottom = y;
+            footLeft = x;
+            footRight = x;
+          } else if (y >= componentBottom - 2) {
+            footLeft = Math.min(footLeft, x);
+            footRight = Math.max(footRight, x);
+          }
+
+          for (let oy = -1; oy <= 1; oy++) {
+            for (let ox = -1; ox <= 1; ox++) {
+              if (ox === 0 && oy === 0) continue;
+              const nx = x + ox;
+              const ny = y + oy;
+              if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+
+              const nextIndex = ny * width + nx;
+              if (visited[nextIndex]) continue;
+              visited[nextIndex] = 1;
+
+              const nextAlpha = imageData[
+                ((top + ny) * imageWidth + left + nx) * 4 + 3
+              ];
+              if (nextAlpha > 8) queue[tail++] = nextIndex;
+            }
+          }
+        }
+
+        if (area > bestArea) {
+          bestArea = area;
+          bestBottom = componentBottom;
+          bestFootLeft = footLeft;
+          bestFootRight = footRight;
         }
       }
     }
 
-    if (lowestY < 0) return { x: width / 2, y: height - 1 };
-
-    // Usa una franja de tres píxeles en la base para centrar el apoyo
-    // incluso cuando un pie queda uno o dos píxeles más bajo que el otro.
-    let minX = width;
-    let maxX = -1;
-    const firstY = Math.max(0, lowestY - 2);
-
-    for (let y = firstY; y <= lowestY; y++) {
-      for (let x = 0; x < width; x++) {
-        const alpha = imageData[((top + y) * imageWidth + left + x) * 4 + 3];
-        if (alpha > 8) {
-          minX = Math.min(minX, x);
-          maxX = Math.max(maxX, x);
-        }
-      }
-    }
+    if (bestBottom < 0) return { x: width / 2, y: height - 1 };
 
     return {
-      x: maxX >= minX ? (minX + maxX) / 2 : width / 2,
-      y: lowestY
+      x: (bestFootLeft + bestFootRight) / 2,
+      y: bestBottom
     };
   }
-
   function prepareSpriteFrames() {
     const frameCanvas = document.createElement("canvas");
     frameCanvas.width = spriteSheet.naturalWidth;
