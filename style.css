@@ -20,7 +20,7 @@ body {
     linear-gradient(160deg, #102d58, #071a37 70%);
 }
 
-.game-shell { width: min(1180px, 100%); margin: 0 auto; }
+.game-shell { width: min(1400px, 100%); margin: 0 auto; }
 
 .game-header {
   display: flex;
