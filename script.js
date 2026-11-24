@@ -77,11 +77,60 @@
     [7, 7], [-7, 7], [7, -7], [-7, -7]
   ];
 
-  // Las celdas del spritesheet tienen márgenes transparentes irregulares.
-  // Se recorta el contenido visible de cada fotograma para que todos queden
-  // centrados por los pies y nunca aparezcan píxeles del fotograma vecino.
+  // Cada fotograma se recorta por su transparencia, pero además se analiza
+  // su zona inferior para encontrar el punto real de apoyo de los pies.
   let spriteFrames = [];
   let spriteScale = 1;
+
+  function findFootAnchor(pixels, canvasWidth, left, top, minX, minY, maxX, maxY) {
+    // Se busca desde el píxel más bajo hacia arriba. Se ignoran píxeles
+    // semitransparentes del antialiasing y se exige una pequeña línea sólida.
+    const searchTop = Math.max(minY, maxY - 12);
+
+    for (let y = maxY; y >= searchTop; y--) {
+      const runs = [];
+      let runStart = -1;
+
+      for (let x = minX; x <= maxX + 1; x++) {
+        const alpha = x <= maxX
+          ? pixels[(y * canvasWidth + x) * 4 + 3]
+          : 0;
+
+        if (alpha >= 80) {
+          if (runStart === -1) runStart = x;
+        } else if (runStart !== -1) {
+          if (x - runStart >= 3) runs.push([runStart, x - 1]);
+          runStart = -1;
+        }
+      }
+
+      if (runs.length) {
+        const footLeft = Math.min(...runs.map(run => run[0]));
+        const footRight = Math.max(...runs.map(run => run[1]));
+        return {
+          x: (footLeft + footRight) / 2 - minX,
+          y: y - minY
+        };
+      }
+    }
+
+    // Respaldo para dibujos cuyo pie no forme una línea de 3 píxeles.
+    let lowestLeft = maxX;
+    let lowestRight = minX;
+    for (let y = Math.max(minY, maxY - 8); y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        if (pixels[(y * canvasWidth + x) * 4 + 3] >= 80) {
+          lowestLeft = Math.min(lowestLeft, x);
+          lowestRight = Math.max(lowestRight, x);
+        }
+      }
+    }
+
+    return {
+      x: (lowestLeft + lowestRight) / 2 - minX,
+      y: maxY - minY
+    };
+  }
 
   function prepareSpriteFrames() {
     const frameCanvas = document.createElement("canvas");
@@ -117,23 +166,30 @@
           }
         }
 
-        const frame = maxX >= minX ? {
-          x: minX,
-          y: minY,
-          width: maxX - minX + 1,
-          height: maxY - minY + 1
-        } : null;
+        let frame = null;
+        if (maxX >= minX) {
+          const footAnchor = findFootAnchor(
+            pixels, frameCanvas.width, left, top, minX, minY, maxX, maxY
+          );
 
-        spriteFrames.push(frame);
-        if (frame) {
+          frame = {
+            x: minX,
+            y: minY,
+            width: maxX - minX + 1,
+            height: maxY - minY + 1,
+            anchorX: footAnchor.x,
+            anchorY: footAnchor.y
+          };
+
           widestFrame = Math.max(widestFrame, frame.width);
           tallestFrame = Math.max(tallestFrame, frame.height);
         }
+
+        spriteFrames.push(frame);
       }
     }
 
-    // Una sola escala para TODO el spritesheet: ningún frame se agranda
-    // o encoge al cambiar de animación u orientación.
+    // Una sola escala para mantener el tamaño del personaje entre fotogramas.
     spriteScale = Math.min(
       player.width / widestFrame,
       player.height / tallestFrame
@@ -177,12 +233,12 @@
     const frame = spriteFrames[row * SHEET.columns + column];
     if (!frame) return;
 
-    // Se mantiene la escala global y se ancla cada recorte por el centro
-    // horizontal y el borde inferior. Esto evita el temblor entre frames.
+    // El punto inferior de los pies de ESTE fotograma se coloca exactamente
+    // en player.x/player.y. Así el cuerpo puede variar de pose sin temblar.
     const drawWidth = frame.width * spriteScale;
     const drawHeight = frame.height * spriteScale;
-    const drawX = player.x - drawWidth / 2;
-    const drawY = player.y - drawHeight;
+    const drawX = player.x - frame.anchorX * spriteScale;
+    const drawY = player.y - frame.anchorY * spriteScale;
 
     ctx.save();
     ctx.fillStyle = "rgba(12, 39, 54, 0.32)";
