@@ -1,8 +1,8 @@
 (() => {
   "use strict";
 
-  // El escenario original mide 1774 × 887 píxeles. El canvas conserva
-  // exactamente esa proporción para no deformar el mapa.
+  // El mundo y el canvas usan las dimensiones originales del escenario.
+  // No existe salto, altura, gravedad ni plataformas elevadas.
   const WORLD = { width: 1774, height: 887 };
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
@@ -15,8 +15,8 @@
   const spriteSheet = new Image();
   spriteSheet.src = "images/player/player.png";
 
-  // 9 columnas × 5 filas. Cada fila contiene 3 frames por orientación:
-  // frente (0-2), perfil (3-5) y espalda (6-8).
+  // Spritesheet: 9 columnas (3 frames por orientación) × 5 filas.
+  // Orientaciones: frontal 0-2, lateral 3-5, espalda 6-8.
   const SHEET = {
     columns: 9,
     rows: 5,
@@ -29,10 +29,11 @@
 
   const player = {
     x: 420,
-    y: 420,
+    y: 420, // Punto de apoyo: centro de los pies sobre el suelo.
     width: 112,
     height: 132,
     direction: "front",
+    facingLeft: false,
     moving: false,
     frame: 0,
     frameTimer: 0,
@@ -46,26 +47,27 @@
   const keys = new Set();
   const directionColumns = { front: 0, side: 3, back: 6 };
 
-  // Polígonos transitables trazados sobre la hierba de las dos islas y
-  // sobre el puente. El agua y los bordes rocosos quedan fuera de ellos.
+  // Límites interiores de las zonas de hierba. El puente conecta ambas
+  // islas; el agua y los bordes rocosos quedan fuera de estas áreas.
   const walkableAreas = [
     [
-      [24, 287], [61, 210], [112, 166], [244, 145], [281, 70],
-      [346, 25], [435, 27], [501, 91], [588, 121], [666, 159],
-      [726, 220], [794, 285], [817, 361], [787, 438], [740, 506],
-      [753, 593], [807, 662], [770, 715], [704, 754], [612, 773],
-      [524, 752], [440, 767], [350, 746], [260, 758], [174, 725],
-      [112, 674], [61, 601], [23, 507]
+      [48, 290], [76, 224], [128, 179], [244, 161], [294, 91],
+      [350, 43], [426, 43], [487, 105], [579, 137], [656, 174],
+      [713, 228], [774, 290], [796, 357], [774, 424], [721, 492],
+      [735, 584], [784, 665], [752, 701], [692, 733], [610, 749],
+      [527, 733], [442, 748], [355, 728], [267, 741], [185, 710],
+      [126, 665], [78, 599], [43, 505]
     ],
     [
-      [963, 315], [1002, 241], [1050, 190], [1122, 166], [1210, 157],
-      [1295, 113], [1365, 45], [1460, 33], [1538, 68], [1607, 123],
-      [1685, 178], [1728, 257], [1745, 365], [1723, 469], [1694, 574],
-      [1720, 663], [1665, 726], [1582, 760], [1490, 768], [1400, 748],
-      [1315, 765], [1220, 750], [1134, 770], [1050, 735],
-      [1000, 674], [1020, 602], [969, 530], [950, 437]
+      [978, 354], [1008, 275], [1056, 213], [1125, 185], [1205, 178],
+      [1291, 137], [1368, 65], [1457, 52], [1528, 83], [1595, 139],
+      [1668, 194], [1708, 267], [1725, 365], [1705, 464], [1677, 570],
+      [1701, 654], [1652, 704], [1578, 739], [1491, 747], [1405, 728],
+      [1317, 744], [1226, 730], [1140, 748], [1060, 715],
+      [1017, 667], [1035, 603], [984, 526], [970, 438]
     ],
-    [[785, 337], [985, 337], [985, 420], [785, 420]]
+    // Superficie transitable del puente.
+    [[790, 348], [979, 348], [979, 408], [790, 408]]
   ];
 
   const FOOTPRINT_RADIUS = 13;
@@ -82,7 +84,8 @@
   function pointInPolygon(x, y, polygon) {
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      const a = polygon[i], b = polygon[j];
+      const a = polygon[i];
+      const b = polygon[j];
       const crosses = ((a[1] > y) !== (b[1] > y)) &&
         (x < (b[0] - a[0]) * (y - a[1]) / ((b[1] - a[1]) || 0.00001) + a[0]);
       if (crosses) inside = !inside;
@@ -90,14 +93,9 @@
     return inside;
   }
 
-  function isWalkable(x, y) {
-    return walkableAreas.some(area => pointInPolygon(x, y, area));
-  }
-
-  // La huella, no el tamaño transparente del sprite, determina si el
-  // jugador sigue dentro del terreno. Así puede acercarse a los bordes
-  // sin que el dibujo choque antes de tiempo.
   function canStandAt(x, y) {
+    // Se comprueba toda la huella para impedir que los pies queden sobre
+    // el agua o fuera de la isla, no solo el punto central.
     return FOOTPRINT_SAMPLES.every(([ox, oy]) =>
       walkableAreas.some(area => pointInPolygon(x + ox, y + oy, area))
     );
@@ -108,15 +106,6 @@
   }
 
   function drawPlayer() {
-    // Sombra fija en el suelo: ya no existe altura, salto ni desplazamiento
-    // vertical independiente del movimiento.
-    ctx.save();
-    ctx.fillStyle = "rgba(12, 39, 54, 0.38)";
-    ctx.beginPath();
-    ctx.ellipse(player.x, player.y - 3, 27, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
     if (!spriteReady) return;
 
     const cellW = spriteSheet.naturalWidth / SHEET.columns;
@@ -128,8 +117,17 @@
     const drawX = player.x - player.width / 2;
     const drawY = player.y - player.height + 12;
 
+    // La sombra permanece siempre en el suelo: el personaje ya no tiene
+    // ningún desplazamiento vertical independiente.
     ctx.save();
-    if (player.direction === "left") {
+    ctx.fillStyle = "rgba(12, 39, 54, 0.32)";
+    ctx.beginPath();
+    ctx.ellipse(player.x, player.y - 3, 25, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    if (player.direction === "side" && player.facingLeft) {
       ctx.translate(player.x * 2, 0);
       ctx.scale(-1, 1);
     }
@@ -144,11 +142,13 @@
 
   function startAttack() {
     if (player.attacking || player.attackCooldown > 0) return;
+
     player.attacking = true;
+    player.moving = false;
     player.attackTimer = 0;
     player.frame = 0;
     player.frameTimer = 0;
-    player.attackCooldown = 0.12;
+    player.attackCooldown = player.attackDuration;
     status.textContent = "¡Ataque con martillo!";
   }
 
@@ -159,14 +159,17 @@
       player.attackTimer += dt;
       const progress = player.attackTimer / player.attackDuration;
       player.frame = Math.min(2, Math.floor(progress * 3));
+
       if (player.attackTimer >= player.attackDuration) {
         player.attacking = false;
         player.attackTimer = 0;
         player.frame = 0;
+        status.textContent = "¡Sigue explorando!";
       }
     }
 
-    let dx = 0, dy = 0;
+    let dx = 0;
+    let dy = 0;
     if (keys.has("ArrowLeft") || keys.has("KeyA")) dx -= 1;
     if (keys.has("ArrowRight") || keys.has("KeyD")) dx += 1;
     if (keys.has("ArrowUp") || keys.has("KeyW")) dy -= 1;
@@ -175,23 +178,23 @@
     const length = Math.hypot(dx, dy);
     player.moving = length > 0 && !player.attacking;
 
-    if (length) {
+    if (length > 0) {
       dx /= length;
       dy /= length;
 
       if (Math.abs(dx) > Math.abs(dy)) {
-        player.direction = dx < 0 ? "left" : "side";
+        player.direction = "side";
+        player.facingLeft = dx < 0;
       } else {
         player.direction = dy < 0 ? "back" : "front";
       }
 
       if (!player.attacking) {
-        const stepX = dx * player.speed * dt;
-        const stepY = dy * player.speed * dt;
-        const nextX = player.x + stepX;
-        const nextY = player.y + stepY;
+        const nextX = player.x + dx * player.speed * dt;
+        const nextY = player.y + dy * player.speed * dt;
 
-        // Colisión por ejes para permitir deslizarse junto a los límites.
+        // Colisión por ejes: permite deslizarse junto a los bordes
+        // y cruzar el puente sin atravesar el agua.
         if (canStandAt(nextX, player.y)) player.x = nextX;
         if (canStandAt(player.x, nextY)) player.y = nextY;
       }
@@ -199,9 +202,9 @@
 
     if (!player.attacking && player.moving) {
       player.frameTimer += dt;
-      if (player.frameTimer >= 0.14) {
+      if (player.frameTimer >= 0.13) {
         player.frame = (player.frame + 1) % 3;
-        player.frameTimer = 0;
+        player.frameTimer -= 0.13;
       }
     } else if (!player.attacking) {
       player.frame = 0;
@@ -230,8 +233,11 @@
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(key)) {
       event.preventDefault();
     }
+
+    if (!keys.has(key) && (key === "Space" || key === "KeyX")) {
+      startAttack();
+    }
     keys.add(key);
-    if (key === "Space" || key === "KeyX") startAttack();
   });
 
   document.addEventListener("keyup", event => keys.delete(event.code));
@@ -242,9 +248,11 @@
     loading.classList.add("hidden");
     requestAnimationFrame(loop);
   };
+
   map.onerror = () => {
     loading.textContent = "No se pudo cargar images/stages/stage 1.png";
   };
+
   spriteSheet.onload = () => { spriteReady = true; };
   spriteSheet.onerror = () => {
     status.textContent = "No se pudo cargar el sprite del jugador.";
