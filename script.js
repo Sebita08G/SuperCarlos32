@@ -81,6 +81,7 @@
   // Se recorta el contenido visible de cada fotograma para que todos queden
   // centrados por los pies y nunca aparezcan píxeles del fotograma vecino.
   let spriteFrames = [];
+  let spriteScale = 1;
 
   function prepareSpriteFrames() {
     const frameCanvas = document.createElement("canvas");
@@ -94,6 +95,9 @@
     const pixels = frameCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height).data;
 
     spriteFrames = [];
+    let widestFrame = 0;
+    let tallestFrame = 0;
+
     for (let row = 0; row < SHEET.rows; row++) {
       for (let col = 0; col < SHEET.columns; col++) {
         const left = Math.floor(col * cellW);
@@ -105,19 +109,35 @@
         for (let y = top; y < bottom; y++) {
           for (let x = left; x < right; x++) {
             if (pixels[(y * frameCanvas.width + x) * 4 + 3] > 8) {
-              if (x < minX) minX = x;
-              if (x > maxX) maxX = x;
-              if (y < minY) minY = y;
-              if (y > maxY) maxY = y;
+              minX = Math.min(minX, x);
+              minY = Math.min(minY, y);
+              maxX = Math.max(maxX, x);
+              maxY = Math.max(maxY, y);
             }
           }
         }
 
-        spriteFrames.push(maxX >= minX ? {
-          x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1
-        } : null);
+        const frame = maxX >= minX ? {
+          x: minX,
+          y: minY,
+          width: maxX - minX + 1,
+          height: maxY - minY + 1
+        } : null;
+
+        spriteFrames.push(frame);
+        if (frame) {
+          widestFrame = Math.max(widestFrame, frame.width);
+          tallestFrame = Math.max(tallestFrame, frame.height);
+        }
       }
     }
+
+    // Una sola escala para TODO el spritesheet: ningún frame se agranda
+    // o encoge al cambiar de animación u orientación.
+    spriteScale = Math.min(
+      player.width / widestFrame,
+      player.height / tallestFrame
+    );
   }
 
   let lastTime = 0;
@@ -157,11 +177,10 @@
     const frame = spriteFrames[row * SHEET.columns + column];
     if (!frame) return;
 
-    // La escala se calcula sobre los píxeles visibles, no sobre la celda
-    // completa. Así el tamaño y el punto de apoyo no "bailan" entre frames.
-    const scale = Math.min(player.width / frame.width, player.height / frame.height);
-    const drawWidth = frame.width * scale;
-    const drawHeight = frame.height * scale;
+    // Se mantiene la escala global y se ancla cada recorte por el centro
+    // horizontal y el borde inferior. Esto evita el temblor entre frames.
+    const drawWidth = frame.width * spriteScale;
+    const drawHeight = frame.height * spriteScale;
     const drawX = player.x - drawWidth / 2;
     const drawY = player.y - drawHeight;
 
